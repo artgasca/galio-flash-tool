@@ -401,6 +401,9 @@ namespace Galio_Flash_Tool
             if (!port.IsOpen)
                 port.Open();
 
+            // ✅ Limpiar cualquier debug pendiente del firmware de aplicación
+            try { port.DiscardInBuffer(); } catch { }
+
             // ser.setDTR(True)
             // ser.setRTS(True)
             //port.DtrEnable = true;
@@ -626,38 +629,51 @@ namespace Galio_Flash_Tool
                     if (string.IsNullOrEmpty(chunk))
                         return;
 
-                    // Acumulamos todo lo que vaya llegando
+                    // Acumulamos todo
                     _hwInfoBuffer.Append(chunk);
 
-                    // Copia local para revisar contenido
                     string bufferStr = _hwInfoBuffer.ToString();
 
-                    // Normalizamos para buscar campos aunque haya saltos de línea en medio
+                    // Quitamos CR/LF para analizar
                     string normalized = bufferStr.Replace("\r", "").Replace("\n", "");
 
                     Console.WriteLine("HW RAW: " + bufferStr);
 
-                    // Condición de “mensaje completo”
-                    if (normalized.Contains("name=") &&
-                        normalized.Contains("version=") &&
-                        normalized.Contains("date=") &&
-                        normalized.Contains("time="))
+                    // ✅ Buscar el inicio REAL de la info de HW
+                    int startIndex = normalized.IndexOf("name=");
+                    if (startIndex < 0)
                     {
-                        // Ya tenemos toda la línea, la parseamos
-                        UpdateHardwareInfoFromLine(normalized);
+                        // Aún no ha llegado 'name=', solo hay basura/debug → si se hace gigante, reseteamos
+                        if (_hwInfoBuffer.Length > 512)
+                            _hwInfoBuffer.Clear();
 
-                        // Limpiamos buffer para el siguiente mensaje
+                        return;
+                    }
+
+                    // Nos quedamos solo con la sección desde "name=" hacia adelante
+                    string infoSection = normalized.Substring(startIndex);
+
+                    // Verificamos que ya está completa (tiene todos los campos)
+                    if (infoSection.Contains("name=") &&
+                        infoSection.Contains("version=") &&
+                        infoSection.Contains("date=") &&
+                        infoSection.Contains("time="))
+                    {
+                        // ✅ Parseamos SOLO la parte limpia
+                        UpdateHardwareInfoFromLine(infoSection);
+
+                        // Limpiamos para el siguiente mensaje
                         _hwInfoBuffer.Clear();
                     }
                     else
                     {
-                        // Opcional: safety net por si algo se va de control
-                        if (_hwInfoBuffer.Length > 256)
-                        {
+                        // Aún falta parte de la línea (truncada), seguimos acumulando
+                        // Safety net para no crecer infinito
+                        if (_hwInfoBuffer.Length > 512)
                             _hwInfoBuffer.Clear();
-                        }
                     }
                 }
+
 
 
             }

@@ -403,9 +403,9 @@ namespace Galio_Flash_Tool
 
             // ser.setDTR(True)
             // ser.setRTS(True)
-            port.DtrEnable = true;
-            port.RtsEnable = true;
-            Thread.Sleep(500);   // time.sleep(2)
+            //port.DtrEnable = true;
+            //port.RtsEnable = true;
+            //Thread.Sleep(500);   // time.sleep(2)
 
             // ser.setDTR(False)   # RESET en HIGH
             // ser.setRTS(True)    # BOOT en LOW

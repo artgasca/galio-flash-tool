@@ -22,6 +22,7 @@ namespace Galio_Flash_Tool
         public bool terminal = false;
         public bool textMode = true;
         public bool bootmode = false;
+        private string firmwareFullPath = "";
         System.Threading.Thread firmwareSender;
         private readonly ManualResetEventSlim _lineAckEvent = new ManualResetEventSlim(false);
 
@@ -34,11 +35,18 @@ namespace Galio_Flash_Tool
         private void btn_search_Click(object sender, EventArgs e)
         {
             OpenFileDialog openFile = new OpenFileDialog();
-            openFile.Filter = "*.hex|*.HEX|*.bin|*.BIN";
+            openFile.Filter = "HEX/BIN Files (*.hex;*.bin)|*.hex;*.bin";
+
             if (openFile.ShowDialog() == DialogResult.OK)
             {
-                txtFirmwareFile.Text = openFile.FileName;
-                readHexInfo();
+                // Guardas la ruta completa para uso interno
+                firmwareFullPath = openFile.FileName;
+
+                // Solo muestras el nombre del archivo
+                txtFirmwareFile.Text = Path.GetFileName(openFile.FileName);
+
+                // Pasas la ruta completa a tu parser actual
+                readHexInfo(firmwareFullPath);
             }
         }
 
@@ -178,6 +186,17 @@ namespace Galio_Flash_Tool
             const int ackTimeoutMs = 2000; // 2 s por línea, ajusta a gusto
             int counter = 0;
 
+            // Validación rápida: que sí haya archivo seleccionado
+            if (string.IsNullOrEmpty(firmwareFullPath))
+            {
+                Invoke(new Action(() =>
+                {
+                    MessageBox.Show("Firmware file not selected.", "Error",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }));
+                return;
+            }
+
             try
             {
                 // Deshabilitar UI mientras se envía
@@ -188,7 +207,8 @@ namespace Galio_Flash_Tool
                     lbl_transferLines.Text = "0";
                 }));
 
-                using (var fileToSend = new StreamReader(txtFirmwareFile.Text))
+                // ⬅️ AQUÍ es donde cambiamos: usamos firmwareFullPath en lugar de txtFirmwareFile.Text
+                using (var fileToSend = new StreamReader(firmwareFullPath))
                 {
                     string line;
 
@@ -258,6 +278,7 @@ namespace Galio_Flash_Tool
                 stopSendingFirmware();
             }
         }
+
         //private void sendFirmware()
         //{
         //    tabControl1.Enabled = false;
@@ -345,7 +366,7 @@ namespace Galio_Flash_Tool
             // ser.setRTS(True)
             port.DtrEnable = true;
             port.RtsEnable = true;
-            Thread.Sleep(2000);   // time.sleep(2)
+            Thread.Sleep(500);   // time.sleep(2)
 
             // ser.setDTR(False)   # RESET en HIGH
             // ser.setRTS(True)    # BOOT en LOW
@@ -371,7 +392,7 @@ namespace Galio_Flash_Tool
             lbl_transferLines.Text = "0";
         }
 
-        private void readHexInfo()
+        private void readHexInfo(string fullPath)
         {
             int counter = 0;
             int maxlines;
@@ -379,7 +400,7 @@ namespace Galio_Flash_Tool
             //string device;
             //string created;
             int found = 0;
-            System.IO.StreamReader file = new System.IO.StreamReader(txtFirmwareFile.Text);
+            System.IO.StreamReader file = new StreamReader(fullPath);
             // lbl_total_lines.Text = "0%";
             progressBar1.Value = 0;
             while ((line = file.ReadLine()) != null)

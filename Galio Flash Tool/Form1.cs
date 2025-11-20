@@ -12,6 +12,7 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 
 
+
 namespace Galio_Flash_Tool
 {
    
@@ -22,14 +23,31 @@ namespace Galio_Flash_Tool
         public bool terminal = false;
         public bool textMode = true;
         public bool bootmode = false;
+
         private string firmwareFullPath = "";
         System.Threading.Thread firmwareSender;
         private readonly ManualResetEventSlim _lineAckEvent = new ManualResetEventSlim(false);
 
         public delegate void updateDebugCallback(string str);
-        public Form1()
+
+        
+
+// ...
+
+        private readonly StringBuilder _hwInfoBuffer = new StringBuilder();
+    public Form1()
         {
             InitializeComponent();
+
+            // Modo terminal por defecto
+            radioRcvText.Checked = true;
+            radioRcvRaw.Checked = false;
+            chkTimestamp.Checked = true;
+            chkAutoscroll.Checked = false;
+
+            radioSendAscii.Checked = true;
+            radioSendHex.Checked = false;
+            chkNlCr.Checked = true; // si quieres enviar CR por defecto
         }
 
         private void btn_search_Click(object sender, EventArgs e)
@@ -39,6 +57,7 @@ namespace Galio_Flash_Tool
 
             if (openFile.ShowDialog() == DialogResult.OK)
             {
+                lbl_uploadStatus.Text = "Ready";
                 // Guardas la ruta completa para uso interno
                 firmwareFullPath = openFile.FileName;
 
@@ -79,6 +98,9 @@ namespace Galio_Flash_Tool
                 //groupBoxUpload.Enabled = false;
                 //groupBox_Received.Enabled = false;
                 //groupBox_SendData.Enabled = false;
+                richTerminal.Clear();
+                groupBox_terminalRX.Enabled = false;
+                groupBoxTerminalTx.Enabled = false;
                 groupBox_hwInfo.Enabled = false;
                 groupBox_fwFile.Enabled = false;
                 groupBox_uploadProgress.Enabled = false;
@@ -99,8 +121,10 @@ namespace Galio_Flash_Tool
                         sp1.PortName = cb_port.Text;
                         sp1.Parity = Parity.None;
                         sp1.DataBits = 8;
-                        sp1.ReadTimeout = -1;
+                        sp1.ReadTimeout = 500;       // en btn_conectar_Click
+                        sp1.NewLine = "\r\n";        // si usas CR+LF desde el PIC
                         sp1.Open();
+
                         btn_connect.Text = "Disconnect";
                         CheckForIllegalCrossThreadCalls = false;
                         //pictureBox_off.Visible = false;
@@ -110,12 +134,17 @@ namespace Galio_Flash_Tool
                         //groupBox_Received.Enabled = true;
                         //groupBox_SendData.Enabled = true;
                         //groupBox_info.Enabled = true;
+                        groupBoxTerminalTx.Enabled = true;
+                        groupBox_terminalRX.Enabled = true;                        
                         groupBox_hwInfo.Enabled = true;
                         groupBox_fwFile.Enabled = true;
                         groupBox_uploadProgress.Enabled = true;
-                        // 1) Forzar modo boot
-                        EnterBootloaderMode(sp1);
-
+                        if (checkBox_autoReset.Checked && terminal==false)
+                        {
+                            // 1) Forzar modo boot
+                            EnterBootloaderMode(sp1);
+                        }
+                        
                     }
 
 
@@ -142,6 +171,7 @@ namespace Galio_Flash_Tool
                     try
                     {
 
+                        lbl_uploadStatus.Text = "Uploading";
                         bootmode = true;
                         firmwareSender = new System.Threading.Thread(sendFirmware);
                         firmwareSender.IsBackground = true;
@@ -151,6 +181,7 @@ namespace Galio_Flash_Tool
                     catch (Exception)
                     {
 
+                        lbl_uploadStatus.Text = "Error";
                         MessageBox.Show("Serial Port Error", "ERROR", MessageBoxButtons.OK, MessageBoxIcon.Stop);
                         sp1.Close();
                         initApp();
@@ -205,6 +236,7 @@ namespace Galio_Flash_Tool
                     tabControl1.Enabled = false;
                     progressBar1.Value = 0;
                     lbl_transferLines.Text = "0";
+                    lbl_percent.Text = "0 %";
                 }));
 
                 // ⬅️ AQUÍ es donde cambiamos: usamos firmwareFullPath en lugar de txtFirmwareFile.Text
@@ -246,6 +278,11 @@ namespace Galio_Flash_Tool
                         {
                             progressBar1.Value = counter;
                             lbl_transferLines.Text = counter.ToString();
+                            int percent = 0;
+                            if (progressBar1.Maximum > 0)
+                                percent = (int)(progressBar1.Value * 100.0 / progressBar1.Maximum);
+
+                            lbl_percent.Text = percent.ToString() + " %";
                         }));
                     }
                 }
@@ -253,6 +290,8 @@ namespace Galio_Flash_Tool
                 // Si llegamos aquí, no hubo timeout
                 Invoke(new Action(() =>
                 {
+                    lbl_percent.Text = "100 %";   // marcamos completo antes de limpiar
+                    lbl_uploadStatus.Text = "Success";
                     MessageBox.Show("Firmware Uploaded", "Success",
                         MessageBoxButtons.OK, MessageBoxIcon.Information);
                     bootmode = false;
@@ -344,10 +383,10 @@ namespace Galio_Flash_Tool
             //pictureBox_off.Visible = true;
             //pictureBox_On.Visible = false;
 
-            lbl_hwInfoDate.Text = "----";
-            lbl_hwInfoName.Text = "----";
-            lbl_hwInfoTime.Text = "----";
-            lbl_hwInfoVersion.Text = "----";
+            lbl_hwInfoDate.Text = "--";
+            lbl_hwInfoName.Text = "--";
+            lbl_hwInfoTime.Text = "--";
+            lbl_hwInfoVersion.Text = "--";
 
             //richTextBox_received.Clear();
             //txtbox_dataSend.Clear();
@@ -436,78 +475,299 @@ namespace Galio_Flash_Tool
             counter = 0;
         }
 
-        private void Form1_Load(object sender, EventArgs e)
+        private void UpdateHardwareInfoFromLine(string line)
         {
-            foreach (string SPort in System.IO.Ports.SerialPort.GetPortNames())
+            if (string.IsNullOrWhiteSpace(line))
+                return;
+
+            // Normalizamos (por si venían \r\n en medio)
+            line = line.Replace("\r", "").Replace("\n", "");
+
+            try
             {
-                cb_port.Items.Add(SPort.Trim());
+                var parts = line.Split(',');
+
+                var kv = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+                foreach (var part in parts)
+                {
+                    var pair = part.Split(new[] { '=' }, 2);
+                    if (pair.Length == 2)
+                    {
+                        var key = pair[0].Trim();
+                        var value = pair[1].Trim();
+                        kv[key] = value;
+                    }
+                }
+
+                BeginInvoke(new Action(() =>
+                {
+                    if (kv.TryGetValue("name", out var name))
+                    {
+                        lbl_hwInfoName.Text = name;
+                        lbl_uploadStatus.Text = "Ready";
+                    }
+                        
+
+                    if (kv.TryGetValue("version", out var version))
+                        lbl_hwInfoVersion.Text = version;
+
+                    if (kv.TryGetValue("date", out var date))
+                        lbl_hwInfoDate.Text = date;
+
+                    if (kv.TryGetValue("time", out var time))
+                        lbl_hwInfoTime.Text = time;
+                    if(checkBox_autoReset.Checked)
+                    MessageBox.Show(name, "HW Found",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }));
+            }
+            catch
+            {
+                // Si viene algo raro, lo ignoramos para no matar la app
             }
         }
 
+
+
+        private void Form1_Load(object sender, EventArgs e)
+        {
+            
+        }
+
+        private void AppendTerminal(string text, Color color)
+        {
+            if (richTerminal.InvokeRequired)
+            {
+                richTerminal.BeginInvoke(new Action<string, Color>(AppendTerminal), text, color);
+                return;
+            }
+
+            // Timestamp si aplica
+            if (chkTimestamp.Checked)
+            {
+                string ts = DateTime.Now.ToString("HH:mm:ss");
+                text = $"[{ts}] {text}";
+            }
+
+            int start = richTerminal.TextLength;
+            richTerminal.SelectionStart = start;
+            richTerminal.SelectionLength = 0;
+            richTerminal.SelectionColor = color;
+            richTerminal.AppendText(text);
+            richTerminal.SelectionColor = richTerminal.ForeColor;
+
+            if (chkAutoscroll.Checked)
+            {
+                richTerminal.SelectionStart = richTerminal.TextLength;
+                richTerminal.ScrollToCaret();
+            }
+        }
+
+        private string ByteArrayToHexString(byte[] data)
+        {
+            var sb = new StringBuilder(data.Length * 3);
+            foreach (byte b in data)
+                sb.Append(Convert.ToString(b, 16).PadLeft(2, '0').PadRight(3, ' '));
+            return sb.ToString().ToUpper();
+        }
+
+
         private void sp1_DataReceived(object sender, SerialDataReceivedEventArgs e)
         {
-            if ((sp1.IsOpen))
+            if (!sp1.IsOpen)
+                return;
+
+            try
             {
-                try
+                if (terminal) // MODO TERMINAL
                 {
+                 
+                    int bytesReceived = sp1.BytesToRead;
+                    if (bytesReceived <= 0) return;
 
-                    if (terminal) // MODO TERMINAL
+                    byte[] bufferReceived = new byte[bytesReceived];
+                    sp1.Read(bufferReceived, 0, bytesReceived);
+
+                    if (radioRcvText.Checked)   // Text
                     {
-                        int bytesReceived = sp1.BytesToRead;
-                        byte[] bufferReceived = new byte[bytesReceived];
-                        sp1.Read(bufferReceived, 0, bytesReceived);
+                        string str = Encoding.ASCII.GetString(bufferReceived, 0, bytesReceived);
+                        AppendTerminal(str, Color.Black);
+                    }
+                    else                        // Raw (HEX)
+                    {
+                        string hex = ByteArrayToHexString(bufferReceived) + Environment.NewLine;
+                        AppendTerminal(hex, Color.Black);
+                    }
 
-                        if (textMode) //En modo texto buscamos cada byte por el salto de linea
+                    return; // salimos del handler, no seguimos con boot/hwinfo
+                }
+                else if (bootmode) // MODO BOOTLOADER
+                {
+                    int bytes = sp1.BytesToRead;
+                    if (bytes <= 0) return;
+
+                    byte[] buffer = new byte[bytes];
+                    sp1.Read(buffer, 0, bytes);
+
+                    for (int i = 0; i < bytes; i++)
+                    {
+                        if (buffer[i] == 0x06) // ACK
                         {
-                            string str = Encoding.ASCII.GetString(bufferReceived, 0, bytesReceived);
-                            //updateTerminal(str);
-                        }
-                        else // MODO HEXADECIMAL en modo hex se formatean los datos en hex
-                        {
-                            //updateTerminal(ByteArrayToHexString(bufferReceived));
+                            nextLine = true;
+                            _lineAckEvent.Set();   // despierta al hilo de envío
+                            break;
                         }
                     }
-                    else if (bootmode) //MODO BOOTLOADER
+                }
+                else // MODO INFO HW (name, version, date, time)
+                {
+                    string chunk = sp1.ReadExisting();  // no bloqueante
+                    if (string.IsNullOrEmpty(chunk))
+                        return;
+
+                    // Acumulamos todo lo que vaya llegando
+                    _hwInfoBuffer.Append(chunk);
+
+                    // Copia local para revisar contenido
+                    string bufferStr = _hwInfoBuffer.ToString();
+
+                    // Normalizamos para buscar campos aunque haya saltos de línea en medio
+                    string normalized = bufferStr.Replace("\r", "").Replace("\n", "");
+
+                    Console.WriteLine("HW RAW: " + bufferStr);
+
+                    // Condición de “mensaje completo”
+                    if (normalized.Contains("name=") &&
+                        normalized.Contains("version=") &&
+                        normalized.Contains("date=") &&
+                        normalized.Contains("time="))
                     {
-                        int bytes = sp1.BytesToRead;
-                        byte[] buffer = new byte[bytes];
-                        sp1.Read(buffer, 0, bytes);
+                        // Ya tenemos toda la línea, la parseamos
+                        UpdateHardwareInfoFromLine(normalized);
 
-                        for (int i = 0; i < bytes; i++)
-                        {
-                            if (buffer[i] == 0x06) // ACK
-                            {
-                                nextLine = true;
-                                _lineAckEvent.Set();   // despierta al hilo de envío
-                                break;
-                            }
-                        }
-
+                        // Limpiamos buffer para el siguiente mensaje
+                        _hwInfoBuffer.Clear();
                     }
                     else
                     {
-                        String info = sp1.ReadLine();
-                        Console.WriteLine(info);
-                        if (info.Contains("name") && info.Contains("version"))
+                        // Opcional: safety net por si algo se va de control
+                        if (_hwInfoBuffer.Length > 256)
                         {
-                            string[] info_s = info.Split('=', ',');
-                            Console.WriteLine("llego");
-                            lbl_hwInfoName.Text = info_s[1].ToString();
-                            lbl_hwInfoVersion.Text = info_s[3].ToString();
-                            lbl_hwInfoDate.Text = info_s[5].ToString();
-                            lbl_hwInfoTime.Text = info_s[7].ToString();
-
+                            _hwInfoBuffer.Clear();
                         }
+                    }
+                }
 
 
+            }
+            catch (TimeoutException)
+            {
+                // si tienes ReadTimeout > 0, puedes loguearlo, pero no revientes la UI
+                // Console.WriteLine("Serial timeout");
+            }
+            catch (IOException)
+            {
+                // Aquí caes cuando cierras el puerto mientras había un Read en progreso.
+                // Lo normal es simplemente ignorar y salir.
+                // Console.WriteLine("Serial IO aborted (port closed/disposed)");
+            }
+
+        }
+
+        private void btn_boot_Click(object sender, EventArgs e)
+        {
+            EnterBootloaderMode(sp1);
+        }
+
+        private void linkLabel_website_LinkClicked(object sender, LinkLabelLinkClickedEventArgs e)
+        {
+            System.Diagnostics.Process.Start("https://www.galio.dev");
+        }
+
+        private void tabControl1_Selected(object sender, TabControlEventArgs e)
+        {
+            if (e.TabPage == tabPageTerminal)   // tu Tab "Terminal"
+                terminal = true;
+            else
+                terminal = false;
+        }
+
+        private void btn_TerminalSend_Click(object sender, EventArgs e)
+        {
+            SendTerminalData();
+        }
+        private void txtSend_KeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.KeyCode == Keys.Enter)
+            {
+                e.SuppressKeyPress = true;
+                SendTerminalData();
+            }
+        }
+        private void SendTerminalData()
+        {
+            if (!sp1.IsOpen)
+                return;
+
+            string text = txtSend.Text;
+            if (string.IsNullOrWhiteSpace(text))
+                return;
+
+            try
+            {
+                if (radioSendAscii.Checked)
+                {
+                    // ASCII
+                    sp1.Write(text);
+
+                    if (chkNlCr.Checked)
+                    {
+                        sp1.Write("\r\n"); // NL/CR
                     }
 
+                    // Eco en terminal (en rojo)
+                    AppendTerminal("> " + text + (chkNlCr.Checked ? "\r\n" : ""), Color.Red);
                 }
-                catch (TimeoutException)
+                else // HEX
                 {
-                    MessageBox.Show("Error");
+                    // Quitamos espacios
+                    string hexStr = text.Replace(" ", "");
+                    if (hexStr.Length % 2 != 0)
+                    {
+                        MessageBox.Show("Hexadecimal malformed", "Warning",
+                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+
+                    byte[] buffer = new byte[hexStr.Length / 2];
+                    for (int i = 0; i < hexStr.Length; i += 2)
+                    {
+                        buffer[i / 2] = Convert.ToByte(hexStr.Substring(i, 2), 16);
+                    }
+
+                    sp1.Write(buffer, 0, buffer.Length);
+
+                    if (chkNlCr.Checked)
+                    {
+                        sp1.Write("\r\n");
+                    }
+
+                    AppendTerminal("> " + ByteArrayToHexString(buffer) + Environment.NewLine, Color.Red);
                 }
+
+                txtSend.Clear();
             }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Error sending data:\r\n" + ex.Message,
+                    "Serial Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void btn_terminalClear_Click(object sender, EventArgs e)
+        {
+            richTerminal.Clear();
         }
     }
 }

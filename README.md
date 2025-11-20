@@ -43,7 +43,7 @@ Incluye un bootloader robusto, comunicación serial optimizada y una terminal in
 
 Ve a la sección de **Releases** para descargar la última versión:
 
-👉 https://github.com/<usuario>/<repo>/releases
+👉 https://github.com/artgasca/galio-flash-tool/releases
 
 Descarga el archivo:
 GalioFlashTool_vX.Y.Z.zip

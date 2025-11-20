@@ -6,9 +6,9 @@ using System.Runtime.InteropServices;
 // conjunto de atributos. Cambie estos valores de atributo para modificar la información
 // asociada con un ensamblado.
 [assembly: AssemblyTitle("Galio Flash Tool")]
-[assembly: AssemblyDescription("")]
+[assembly: AssemblyDescription("Flash Program for Galio Products")]
 [assembly: AssemblyConfiguration("")]
-[assembly: AssemblyCompany("")]
+[assembly: AssemblyCompany("Galio Electronics")]
 [assembly: AssemblyProduct("Galio Flash Tool")]
 [assembly: AssemblyCopyright("Copyright ©  2025")]
 [assembly: AssemblyTrademark("")]
